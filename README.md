@@ -23,6 +23,7 @@ calcular KPIs de precisión (MAE, RMSE, bias) y monitorear SLAs del laboratorio.
 ---
 
 ## Arquitectura
+![Architecture Diagram](docs/architecture.svg)
 data/raw/                        PostgreSQL (mining_db)
 ├── sensor_readings.csv  ──ETL──► fact_sensor_readings
 └── assay_results.csv    ──ETL──► fact_assay_results
