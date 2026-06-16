@@ -3,11 +3,10 @@ ETL Pipeline - Mining Grade Control
 Extrae datos crudos de CSV, los transforma y carga en PostgreSQL.
 
 Flujo:
-    data/raw/sensor_readings.csv  ──►  fact_sensor_readings
-    data/raw/assay_results.csv    ──►  fact_assay_results
-    (dimensiones se pueblan automáticamente desde los datos)
+  data/raw/sensor_readings.csv  ──►  fact_sensor_readings
+  data/raw/assay_results.csv    ──►  fact_assay_results
+  (dimensiones se pueblan automáticamente desde los datos)
 """
-
 import pandas as pd
 import numpy as np
 from sqlalchemy import create_engine, text
@@ -26,12 +25,10 @@ DB_PASSWORD = os.getenv("DB_PASSWORD")
 
 DATABASE_URL = f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 
-
 # ── Conexión ─────────────────────────────────────────────────────────────────
 def get_engine():
     engine = create_engine(DATABASE_URL)
     return engine
-
 
 # ════════════════════════════════════════════════════════════════════════════
 # EXTRACCIÓN
@@ -39,7 +36,6 @@ def get_engine():
 def extract():
     """Lee los CSV crudos y retorna DataFrames."""
     print("\n[EXTRACT] Leyendo archivos CSV...")
-
     sensor_df = pd.read_csv(
         "data/raw/sensor_readings.csv",
         parse_dates=["timestamp"]
@@ -48,11 +44,9 @@ def extract():
         "data/raw/assay_results.csv",
         parse_dates=["sample_date", "result_date"]
     )
-
     print(f"  sensor_readings : {len(sensor_df):>6} filas")
     print(f"  assay_results   : {len(assay_df):>6} filas")
     return sensor_df, assay_df
-
 
 # ════════════════════════════════════════════════════════════════════════════
 # TRANSFORMACIÓN + VALIDACIÓN (QC)
@@ -73,13 +67,12 @@ def transform_sensor(df):
     # ── 2. Nulos en tonnage ──────────────────────────────────────────────────
     n_nulls = df["tonnage"].isna().sum()
     print(f"  Nulos en tonnage          : {n_nulls}")
-    # Imputamos con la mediana por equipo (estrategia conservadora)
+    # Imputamos con la mediana por equipo
     df["tonnage"] = df.groupby("equipment_id")["tonnage"].transform(
         lambda x: x.fillna(x.median())
     )
 
     # ── 3. Outliers en sensor_cu_grade ──────────────────────────────────────
-    # Definición: más de 3 desviaciones estándar de la media (regla estadística estándar)
     mean_grade = df["sensor_cu_grade"].mean()
     std_grade  = df["sensor_cu_grade"].std()
     upper_limit = mean_grade + 3 * std_grade
@@ -95,7 +88,6 @@ def transform_sensor(df):
     print(f"    Límite superior         : {upper_limit:.4f}%")
 
     # ── 4. Flag QC general ───────────────────────────────────────────────────
-    # Pasa QC si: no es duplicado, no es outlier, tonnage válido
     df["qc_passed"] = (
         ~df["is_duplicate"] &
         ~df["is_outlier"] &
@@ -106,23 +98,18 @@ def transform_sensor(df):
 
     # ── 5. Guardar versión procesada ─────────────────────────────────────────
     df.to_csv("data/processed/sensor_readings_clean.csv", index=False)
-
     return df
-
 
 def transform_assay(df):
     """Calcula campos derivados en assay_results."""
     print("\n[TRANSFORM] Procesando assay_results...")
-
-    # Calcular turnaround en días (tiempo de respuesta del laboratorio)
+    # Calcular turnaround en días
     df["turnaround_days"] = (
         df["result_date"] - df["sample_date"]
     ).dt.total_seconds() / 86400
-
     df.to_csv("data/processed/assay_results_clean.csv", index=False)
     print(f"  Turnaround promedio (días): {df['turnaround_days'].mean():.1f}")
     return df
-
 
 def build_dim_equipment(sensor_df):
     """Construye la tabla de dimensión de equipos desde los datos."""
@@ -135,7 +122,6 @@ def build_dim_equipment(sensor_df):
         "active"        : True
     })
     return dim
-
 
 def build_dim_location(sensor_df):
     """Construye la tabla de dimensión de ubicaciones/bancos."""
@@ -157,7 +143,6 @@ def build_dim_location(sensor_df):
     })
     return dim
 
-
 def build_dim_time(sensor_df, assay_df):
     """Construye la dimensión tiempo con todos los días en el rango de datos."""
     all_dates = pd.concat([
@@ -165,7 +150,7 @@ def build_dim_time(sensor_df, assay_df):
         assay_df["sample_date"].dt.date.rename("date"),
         assay_df["result_date"].dt.date.rename("date"),
     ]).drop_duplicates()
-
+    
     dates = pd.to_datetime(sorted(all_dates))
     dim = pd.DataFrame({
         "full_date"   : dates.date,
@@ -179,14 +164,12 @@ def build_dim_time(sensor_df, assay_df):
     })
     return dim
 
-
 # ════════════════════════════════════════════════════════════════════════════
 # CARGA
 # ════════════════════════════════════════════════════════════════════════════
 def load_dimensions(engine, dim_equipment, dim_location, dim_time):
     """Carga las tablas de dimensión. Usa INSERT ... ON CONFLICT DO NOTHING (idempotente)."""
     print("\n[LOAD] Cargando dimensiones...")
-
     with engine.begin() as conn:
         # dim_equipment
         for _, row in dim_equipment.iterrows():
@@ -215,47 +198,43 @@ def load_dimensions(engine, dim_equipment, dim_location, dim_time):
             """), row.to_dict())
         print(f"  dim_time      : {len(dim_time)} registros")
 
-
-def load_facts(engine, sensor_df, assay_df):
-    """Carga las tablas de hechos. Solo carga registros que pasan QC básico."""
+def load_facts(engine, sensor_df, assay_clean):
     print("\n[LOAD] Cargando tablas de hechos...")
-
-    # Solo cargamos el primer registro de cada reading_id (eliminamos duplicados reales)
     sensor_clean = sensor_df.drop_duplicates(subset=["reading_id"], keep="first")
-
-    # Columnas que van a la tabla
+    
     sensor_cols = [
         "reading_id", "timestamp", "equipment_id", "bench_id",
         "x_coord", "y_coord", "sensor_cu_grade", "tonnage",
         "is_outlier", "is_duplicate", "qc_passed"
     ]
-
-    sensor_clean[sensor_cols].to_sql(
-        "fact_sensor_readings",
-        engine,
-        if_exists="append",
-        index=False,
-        method="multi",
-        chunksize=500
-    )
-    print(f"  fact_sensor_readings: {len(sensor_clean)} filas cargadas")
-
+    
     assay_cols = [
         "assay_id", "reading_id", "sample_date",
         "result_date", "assay_cu_grade", "turnaround_days"
     ]
-    assay_df[assay_cols].to_sql(
-        "fact_assay_results",
-        engine,
-        if_exists="append",
-        index=False,
-        method="multi",
-        chunksize=500
-    )
-    print(f"  fact_assay_results  : {len(assay_df)} filas cargadas")
-
-
-# ════════════════════════════════════════════════════════════════════════════
+    
+    # 1. Convertimos los DataFrames a diccionarios nativos de Python 
+    # y reemplazamos los valores nulos para que PostgreSQL los entienda.
+    sensor_data = sensor_clean[sensor_cols].replace({np.nan: None}).to_dict(orient="records")
+    assay_data = assay_clean[assay_cols].replace({np.nan: None}).to_dict(orient="records")
+    
+    # 2. Inserción masiva nativa (Bypass total a Pandas to_sql)
+    with engine.begin() as conn:
+        if sensor_data:
+            conn.execute(text("""
+                INSERT INTO fact_sensor_readings 
+                (reading_id, timestamp, equipment_id, bench_id, x_coord, y_coord, sensor_cu_grade, tonnage, is_outlier, is_duplicate, qc_passed)
+                VALUES (:reading_id, :timestamp, :equipment_id, :bench_id, :x_coord, :y_coord, :sensor_cu_grade, :tonnage, :is_outlier, :is_duplicate, :qc_passed)
+            """), sensor_data)
+        print(f"  fact_sensor_readings: {len(sensor_clean)} filas cargadas")
+        
+        if assay_data:
+            conn.execute(text("""
+                INSERT INTO fact_assay_results 
+                (assay_id, reading_id, sample_date, result_date, assay_cu_grade, turnaround_days)
+                VALUES (:assay_id, :reading_id, :sample_date, :result_date, :assay_cu_grade, :turnaround_days)
+            """), assay_data)
+        print(f"  fact_assay_results  : {len(assay_clean)} filas cargadas")
 # MAIN
 # ════════════════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
