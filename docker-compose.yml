@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+
+  # Contenedor 1: Base de datos PostgreSQL
+  postgres:
+    image: postgres:16
+    container_name: mining_postgres
+    environment:
+      POSTGRES_USER: mining_user
+      POSTGRES_PASSWORD: mining_pass123
+      POSTGRES_DB: mining_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./sql/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
+      - ./sql/views_qc.sql:/docker-entrypoint-initdb.d/02_views_qc.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mining_user -d mining_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Contenedor 2: Pipeline Python
+  pipeline:
+    build: .
+    container_name: mining_pipeline
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: mining_db
+      DB_USER: mining_user
+      DB_PASSWORD: mining_pass123
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      sh -c "python src/generate_synthetic_data.py &&
+             python src/etl_pipeline.py &&
+             python src/data_quality_checks.py"
+
+volumes:
+  postgres_data:
